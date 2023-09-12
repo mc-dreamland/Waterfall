@@ -1,0 +1,232 @@
+From 21033beea41c777e519112ab06c22799e2630bc7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E6=B5=85=E7=88=B1?=
+ <21982139+ShallowAi@users.noreply.github.com>
+Date: Tue, 12 Sep 2023 16:17:04 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=94=AF=E6=8C=81=E7=BD=91=E6=98=93=E7=99=BB?=
+ =?UTF-8?q?=E5=BD=95=E5=92=8C=E4=B8=AD=E6=96=87=E5=90=8D=E6=AD=A3=E7=89=88?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+
+diff --git a/proxy/src/main/java/net/md_5/bungee/conf/Configuration.java b/proxy/src/main/java/net/md_5/bungee/conf/Configuration.java
+index 8911bee8..9e7cd710 100644
+--- a/proxy/src/main/java/net/md_5/bungee/conf/Configuration.java
++++ b/proxy/src/main/java/net/md_5/bungee/conf/Configuration.java
+@@ -74,6 +74,11 @@ public abstract class Configuration implements ProxyConfig
+     private int compressionThreshold = 256;
+     private boolean preventProxyConnections;
+     private boolean forgeSupport = true; // Waterfall: default to enabled
++    /**
++     * Netease: 认证相关配置
++     */
++    private String gameId = "";
++    private String authUrl = "http://x19authexpr.nie.netease.com/check";
+ 
+     @Synchronized("serversLock") // Waterfall
+     public void load()
+@@ -110,6 +115,11 @@ public abstract class Configuration implements ProxyConfig
+         compressionThreshold = adapter.getInt( "network_compression_threshold", compressionThreshold );
+         preventProxyConnections = adapter.getBoolean( "prevent_proxy_connections", preventProxyConnections );
+         forgeSupport = adapter.getBoolean( "forge_support", forgeSupport );
++        /**
++         * Netease: 认证相关配置
++         */
++        gameId = adapter.getString("game_id", gameId);
++        authUrl = adapter.getString("auth_url", authUrl);
+ 
+         disabledCommands = new CaseInsensitiveSet( (Collection<String>) adapter.getList( "disabled_commands", Arrays.asList( "disabledcommandhere" ) ) );
+ 
+diff --git a/proxy/src/main/java/net/md_5/bungee/connection/HasJoinedRequest.java b/proxy/src/main/java/net/md_5/bungee/connection/HasJoinedRequest.java
+new file mode 100644
+index 00000000..262d858b
+--- /dev/null
++++ b/proxy/src/main/java/net/md_5/bungee/connection/HasJoinedRequest.java
+@@ -0,0 +1,22 @@
++package net.md_5.bungee.connection;
++
++import lombok.Data;
++
++@Data
++public class HasJoinedRequest {
++    private String username;
++
++    private String serverId;
++
++    private String gameID;
++
++    public String toString() {
++        return "HasJoinedRequest(username=" + getUsername() + ", serverId=" + getServerId() + ", gameID=" + getGameID() + ")";
++    }
++
++    public HasJoinedRequest(String username, String serverId, String gameID) {
++        this.username = username;
++        this.serverId = serverId;
++        this.gameID = gameID;
++    }
++}
+diff --git a/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java b/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java
+index ca0e3764..cf145a23 100644
+--- a/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java
++++ b/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java
+@@ -115,6 +115,10 @@ public class InitialHandler extends PacketHandler implements PendingConnection
+     private boolean legacy;
+     @Getter
+     private String extraDataInHandshake = "";
++    @Getter
++    private String gameId = BungeeCord.getInstance().getConfig().getGameId();
++    @Getter
++    private String authUrl = BungeeCord.getInstance().getConfig().getAuthUrl();
+ 
+     @Override
+     public boolean shouldHandle(PacketWrapper packet) throws Exception
+@@ -398,11 +402,12 @@ public class InitialHandler extends PacketHandler implements PendingConnection
+     {
+         Preconditions.checkState( thisState == State.USERNAME, "Not expecting USERNAME" );
+ 
+-        if ( !AllowedCharacters.isValidName( loginRequest.getData(), onlineMode ) )
+-        {
+-            disconnect( bungee.getTranslation( "name_invalid" ) );
+-            return;
+-        }
++        // Netease: 允许中文名
++        //        if ( !AllowedCharacters.isValidName( loginRequest.getData(), onlineMode ) )
++        //        {
++        //            disconnect( bungee.getTranslation( "name_invalid" ) );
++        //            return;
++        //        }
+ 
+         if ( BungeeCord.getInstance().config.isEnforceSecureProfile() && getVersion() < ProtocolConstants.MINECRAFT_1_19_3 )
+         {
+@@ -510,11 +515,9 @@ public class InitialHandler extends PacketHandler implements PendingConnection
+         {
+             sha.update( bit );
+         }
+-        String encodedHash = URLEncoder.encode( new BigInteger( sha.digest() ).toString( 16 ), "UTF-8" );
+-
+-        String preventProxy = ( BungeeCord.getInstance().config.isPreventProxyConnections() && getSocketAddress() instanceof InetSocketAddress ) ? "&ip=" + URLEncoder.encode( getAddress().getAddress().getHostAddress(), "UTF-8" ) : "";
+-        String authURL = String.format( MOJANG_AUTH_URL, encName, encodedHash, preventProxy );
+-
++        // Netease: 登录额外请求以完成认证调用
++        String serverID = new BigInteger(sha.digest()).toString(16);
++        final HasJoinedRequest data = new HasJoinedRequest(getName(), serverID, gameId);
+         Callback<String> handler = new Callback<String>()
+         {
+             @Override
+@@ -540,7 +543,8 @@ public class InitialHandler extends PacketHandler implements PendingConnection
+             }
+         };
+         //thisState = State.FINISHING; // Waterfall - move earlier
+-        HttpClient.get( authURL, ch.getHandle().eventLoop(), handler );
++        // Netease: 变更为POST请求
++        HttpClient.post(authUrl, data, ch.getHandle().eventLoop(), handler);
+     }
+ 
+     private void finish()
+diff --git a/proxy/src/main/java/net/md_5/bungee/http/HttpClient.java b/proxy/src/main/java/net/md_5/bungee/http/HttpClient.java
+index c3683c30..4919c4a4 100644
+--- a/proxy/src/main/java/net/md_5/bungee/http/HttpClient.java
++++ b/proxy/src/main/java/net/md_5/bungee/http/HttpClient.java
+@@ -8,17 +8,18 @@ import io.netty.channel.ChannelFuture;
+ import io.netty.channel.ChannelFutureListener;
+ import io.netty.channel.ChannelOption;
+ import io.netty.channel.EventLoop;
+-import io.netty.handler.codec.http.DefaultHttpRequest;
+-import io.netty.handler.codec.http.HttpHeaderNames;
+-import io.netty.handler.codec.http.HttpMethod;
+-import io.netty.handler.codec.http.HttpRequest;
+-import io.netty.handler.codec.http.HttpVersion;
++import io.netty.handler.codec.http.*;
++
+ import java.net.InetAddress;
+ import java.net.URI;
+ import java.net.UnknownHostException;
++import java.nio.charset.StandardCharsets;
+ import java.util.concurrent.TimeUnit;
++
++import io.netty.handler.codec.http.multipart.InterfaceHttpData;
+ import lombok.AccessLevel;
+ import lombok.NoArgsConstructor;
++import net.md_5.bungee.BungeeCord;
+ import net.md_5.bungee.api.Callback;
+ import net.md_5.bungee.netty.PipelineUtils;
+ 
+@@ -109,6 +110,75 @@ public class HttpClient
+         //        option( ChannelOption.CONNECT_TIMEOUT_MILLIS, TIMEOUT ).remoteAddress( inetHost, port ).connect().addListener( future );
+     }
+ 
++    // Netease: 新增POST方法
++    public static void post(String url, Object data, EventLoop eventLoop, final Callback<String> callback){
++        Preconditions.checkNotNull( url, "url" );
++        Preconditions.checkNotNull( eventLoop, "eventLoop" );
++        Preconditions.checkNotNull( callback, "callBack" );
++
++        final URI uri = URI.create( url );
++
++        Preconditions.checkNotNull( uri.getScheme(), "scheme" );
++        Preconditions.checkNotNull( uri.getHost(), "host" );
++        boolean ssl = uri.getScheme().equals( "https" );
++        int port = uri.getPort();
++        if ( port == -1 )
++        {
++            switch ( uri.getScheme() )
++            {
++                case "http":
++                    port = 80;
++                    break;
++                case "https":
++                    port = 443;
++                    break;
++                default:
++                    throw new IllegalArgumentException( "Unknown scheme " + uri.getScheme() );
++            }
++        }
++        ChannelFutureListener future = new ChannelFutureListener()
++        {
++            @Override
++            public void operationComplete(ChannelFuture future) throws Exception
++            {
++                if ( future.isSuccess() )
++                {
++                    String path = uri.getRawPath() + ( ( uri.getRawQuery() == null ) ? "" : "?" + uri.getRawQuery() );
++
++                    // Netease: POST相关请求
++                    HttpRequest request;
++                    if (data == null) {
++                        request = new DefaultHttpRequest (HttpVersion.HTTP_1_1, HttpMethod.GET, path  );
++                    } else {
++                        DefaultFullHttpRequest fullRequest = new DefaultFullHttpRequest( HttpVersion.HTTP_1_1, HttpMethod.POST, path );
++                        fullRequest.headers().set( HttpHeaderNames.CONTENT_TYPE, "application/json");
++                        String content = BungeeCord.getInstance().gson.toJson(data);
++                        byte[] raw = content.getBytes(StandardCharsets.UTF_8);
++                        fullRequest.headers().set( HttpHeaderNames.CONTENT_LENGTH, raw.length);
++                        fullRequest.content().clear().writeBytes(raw);
++
++                        request = fullRequest;
++                    }
++                    request.headers().set( HttpHeaderNames.HOST, uri.getHost() );
++
++                    future.channel().writeAndFlush( request );
++                } else
++                {
++                    addressCache.invalidate( uri.getHost() );
++                    callback.done( null, future.cause() );
++                }
++            }
++        };
++
++
++        // Waterfall Start - Optionally use Netty's async DNS Resolver
++        if (net.md_5.bungee.api.ProxyServer.getInstance().getConfig().isUseNettyDnsResolver()) {
++            getWithNettyResolver(eventLoop, uri, port, future, callback, ssl);
++        } else {
++            getWithDefaultResolver(eventLoop, uri, port, future, callback, ssl);
++        }
++    }
++
+     private static void getWithNettyResolver(EventLoop eventLoop, URI uri, int port, ChannelFutureListener future, Callback<String> callback, boolean ssl) {
+         java.net.InetSocketAddress address = java.net.InetSocketAddress.createUnresolved(uri.getHost(), port);
+         // Waterfall - netty reflection -> factory
+-- 
+2.32.0.windows.2
+
