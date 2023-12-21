@@ -1,0 +1,32 @@
+From 51495991758aa6cd494e02193fc0892082a38a29 Mon Sep 17 00:00:00 2001
+From: Shane Freeder <theboyetronic@gmail.com>
+Date: Fri, 21 Apr 2023 15:32:33 +0100
+Subject: [PATCH] reduce log spam from clients registeirng too many channels
+
+
+diff --git a/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java b/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java
+index a9358a51..5e74d0e2 100644
+--- a/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java
++++ b/proxy/src/main/java/net/md_5/bungee/connection/InitialHandler.java
+@@ -162,7 +162,17 @@ public class InitialHandler extends PacketHandler implements PendingConnection
+     @Override
+     public void handle(PluginMessage pluginMessage) throws Exception
+     {
+-        this.relayMessage( pluginMessage );
++        // Waterfall start
++        try {
++            this.relayMessage(pluginMessage);
++        } catch (IllegalStateException | IllegalArgumentException ex) {
++            if (net.md_5.bungee.protocol.MinecraftDecoder.DEBUG) {
++                throw ex;
++            } else {
++                throw new QuietException(ex.getMessage());
++            }
++        }
++        // Waterfall end
+     }
+ 
+     @Override
+-- 
+2.32.0.windows.2
+
